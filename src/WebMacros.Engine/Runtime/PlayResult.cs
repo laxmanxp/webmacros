@@ -33,3 +33,12 @@ public sealed record InterpreterOptions
     public double DefaultTimeoutPageSeconds { get; init; } = 60;
     public string Version { get; init; } = "1.0.0";
 }
+
+/// <summary>Per-run settings, used by the scripting API (iimSet values for the next iimPlay).</summary>
+public sealed record MacroRunOptions
+{
+    /// <summary>Variables applied (in order, with SET semantics) before the first line runs.</summary>
+    public IReadOnlyList<KeyValuePair<string, string>> Variables { get; init; } = Array.Empty<KeyValuePair<string, string>>();
+    /// <summary>Overrides the default of !EXTRACT_TEST_POPUP for this run (the macro can still SET it).</summary>
+    public bool? ShowExtractPopup { get; init; }
+}

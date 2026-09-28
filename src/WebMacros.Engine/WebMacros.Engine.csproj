@@ -5,6 +5,9 @@
     <Version>1.0.0</Version>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Jint" Version="4.16.4" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="WebMacros.Engine.Tests" />
   </ItemGroup>
 </Project>
