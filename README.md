@@ -3,7 +3,8 @@
 WebMacros is a Windows desktop browser-automation tool in the style of **iMacros**. It has a built-in
 Chromium browser (Microsoft Edge **WebView2**) and a macro recorder, and it plays back macros written in an
 iMacros-compatible `.iim` language: fill forms, click, extract data to CSV, loop over CSV datasources,
-take screenshots, answer JavaScript dialogs and more.
+take screenshots, answer JavaScript dialogs and more. **JavaScript macros** (`.js`) drive `.iim` macros with real
+loops and conditions, like the iMacros Scripting Interface.
 
 ```
 VERSION BUILD=1000
@@ -21,6 +22,7 @@ SAVEAS TYPE=EXTRACT FOLDER=* FILE=results.csv
 - [Using the app](#using-the-app)
 - [Project layout](#project-layout)
 - [Language reference](#language-reference)
+- [JavaScript macros (.js)](#javascript-macros-js)
 - [Not implemented / differences from iMacros](#not-implemented--differences-from-imacros)
 
 ## Requirements
@@ -47,7 +49,7 @@ On first start, WebMacros creates these folders:
 
 | Folder | Purpose |
 |---|---|
-| `%USERPROFILE%\Documents\WebMacros\Macros` | Your `*.iim` macros. Four sample macros are added on first run. |
+| `%USERPROFILE%\Documents\WebMacros\Macros` | Your `*.iim` macros and `*.js` JavaScript macros. Sample macros are added once (the names already added are remembered in `.samples-seeded`, so samples from newer versions appear and deleted ones are not restored). |
 | `%USERPROFILE%\Documents\WebMacros\Datasources` | CSV files for `!DATASOURCE`. `customers.csv` is added as a sample. |
 | `%USERPROFILE%\Documents\WebMacros\Downloads` | Default target for `SAVEAS` / `SCREENSHOT` when `FOLDER=*` is used. |
 | `%LOCALAPPDATA%\WebMacros\WebView2` | Browser profile (cookies, cache). |
@@ -60,16 +62,17 @@ On first start, WebMacros creates these folders:
 | `02-Fill-Form-From-CSV.iim` | Fills https://httpbin.org/forms/post once for each row of `customers.csv` (text, tel, email, radio, checkbox, time, textarea, button). Use **Play Loop** with Max = 4. |
 | `03-Loop-Visit-Pages.iim` | Visits a list of pages chosen with `EVAL` and `!LOOP`, times each load with `STOPWATCH`, and writes url/title/time/`!NOW` to CSV. Use **Play Loop** with Max = 3. |
 | `04-Dialogs-Eval-Prompt-Demo.iim` | `PROMPT`, `EVAL`, and `ONDIALOG` answering `alert` / `confirm` / `prompt` automatically. |
+| `05-Script-Add-Rows-From-CSV.js` | JavaScript macro: opens a demo page, then a `while` loop clicks **Add Row** and fills each row from `customers.csv` (`readCsv`, `iimSet`, `iimPlay("CODE:...")`). An `if` on the extracted status text stops at "Maximum rows reached"; large orders get the priority checkbox; `iimEval` counts the rows at the end. |
 
 ## Using the app
 
 - **Browser**: address bar, back/forward/reload, and tabs (`+` / `✕`). Links that open a new window open in a new tab.
-- **Side panel**: the macros in the Macros folder. A single click opens a macro in the editor, and a double click also plays it.
-  - **Play** (F5) runs the macro in the editor once. It plays the editor text, so you don't need to save first.
-  - **Play Loop** runs it *Max* times. `!LOOP` counts 1, 2, 3, ...
+- **Side panel**: the macros (`.iim`) and JavaScript macros (`.js`) in the Macros folder. A single click opens a macro in the editor, and a double click also plays it.
+  - **Play** (F5) runs the macro or script in the editor once. It plays the editor text, so you don't need to save first.
+  - **Play Loop** runs a `.iim` macro *Max* times. `!LOOP` counts 1, 2, 3, ... A `.js` script runs once (use a loop in the script).
   - **Record** captures your clicks, typing, select/checkbox changes, Enter-submits, address-bar navigations, back/refresh and tab switches as macro lines in a new macro.
   - **Stop** stops playback or recording. **Resume** continues after `PAUSE`.
-  - **New**, **Save** (Ctrl+S) and **Save as…** manage macro files. **Folder** opens the WebMacros folder in Explorer.
+  - **New**, **New JS**, **Save** (Ctrl+S) and **Save as…** manage macro files (a script is saved as `.js`). **Folder** opens the WebMacros folder in Explorer.
 - **Editor**: a plain monospace editor. During playback, the line that is running is highlighted, and the status bar shows `Loop n · Line m`. If a macro fails, the failing line stays highlighted and an error box shows the line number and message.
 - **Log**: shows each loop, extracted values (green), warnings (orange), errors (red), dialogs, stopwatch results and saved files.
 
@@ -82,7 +85,8 @@ src/WebMacros.Engine/          net10.0 class library – no UI and no browser de
   Scripting/                   FinderRuntime (JS), TagSpecBuilder, ScriptBuilder
   Runtime/                     MacroInterpreter, MacroState (variables), IBrowserDriver, IMacroHost, CSV
   Recording/                   RecorderScript (JS), RecordedAction, MacroRecorder (JS events -> TAG lines)
-  Samples/                     Sample macros seeded on first run
+  Scripts/                     ScriptRunner: JavaScript macros (.js) on Jint with the iim* API
+  Samples/                     Sample macros and scripts seeded into the Macros folder
 src/WebMacros.App/             net10.0-windows WPF app (WebView2)
   Browser/WebView2BrowserDriver.cs   IBrowserDriver on CoreWebView2
 tests/WebMacros.Engine.Tests/  xUnit tests. They use a fake IBrowserDriver that runs the generated JS
@@ -313,6 +317,62 @@ A failing line stops the macro. WebMacros highlights the line and reports `Line 
 logs the error and continues instead, and `SET !ERRORIGNORE NO` switches this off again. Syntax errors are reported
 before anything runs.
 
+## JavaScript macros (.js)
+
+A `.js` file in the Macros folder is a JavaScript macro. It runs in-process in the [Jint](https://github.com/sebastienros/jint)
+engine (ECMAScript 2023: `let`/`const`, arrow functions, classes, `JSON`, regular expressions, ...) and controls
+playback through the iMacros scripting API:
+
+```js
+var rows = readCsv("customers.csv");          // Datasources folder
+for (var i = 1; i < rows.length; i++) {       // row 0 is the header
+  iimSet("name", rows[i][0]);
+  var ret = iimPlay("CODE:URL GOTO=https://httpbin.org/forms/post\n" +
+                    "TAG POS=1 TYPE=INPUT:TEXT ATTR=NAME:custname CONTENT={{name}}\n" +
+                    "TAG POS=1 TYPE=H1 ATTR=* EXTRACT=TXT");
+  if (ret < 0) { console.error(iimGetLastError()); continue; }
+  if (iimGetLastExtract(1) == "#EANF#") iimDisplay("no heading for " + rows[i][0]);
+}
+```
+
+| Function | Description |
+|---|---|
+| `iimPlay(macro)` | Plays a macro and waits for it. `macro` is either inline code starting with `CODE:` (lines separated by `\n`) or a macro name/path. A name is looked up in the script's folder, then in the Macros folder; `.iim` is added if missing (`iimPlay("01-DuckDuckGo-Search-Extract")`, `iimPlay("sub/login.iim")`). Returns `1` on success or a negative code (below). |
+| `iimSet(name, value)` | Sets a variable for the **next** `iimPlay` only (then it is cleared). Use it as `{{name}}`. Built-in variables work too, e.g. `iimSet("!TIMEOUT_STEP", 2)`, `iimSet("!DATASOURCE_LINE", i)`. The iMacros 6 form `iimSet("-var_name", v)` is accepted. |
+| `iimGetLastExtract(n)` / `iimGetExtract(n)` | The n-th value (1-based) extracted by the last `iimPlay`; `#nodata#` if there is none. `n = 0` or no argument returns all values joined with `[EXTRACT]`. |
+| `iimGetLastError()` / `iimGetErrorText()` | Error text of the last `iimPlay`, e.g. `CODE line 3: TAG: Element not found ...`; `""` after a success. `iimGetLastErrorCode()` returns the code. |
+| `iimDisplay(message)` | Shows the message in the status bar and logs it. |
+| `iimExit()` | Ends the script immediately (reported as completed). It cannot be caught by `try/catch`. |
+| `iimEval(js)` | Runs JavaScript **in the current page** (via the browser driver, like `EVAL` in a macro) and returns the result as a string. A page error throws a JS `Error` (`iimEval: ...`) you can catch. |
+| `alert(msg)`, `confirm(msg)`, `prompt(msg, default)` | The app's dialogs. `confirm` returns `true`/`false`; `prompt` returns the text or `null` on Cancel. |
+| `console.log/info/debug/warn/error(...)` | Writes to the log pane (warn = orange, error = red). Objects are printed as JSON. |
+| `readCsv(file[, delimiter])` | Reads a CSV file (RFC 4180, default delimiter `,`; `"\t"` for tab) into an array of rows (arrays of strings, header included). Looked up in the Datasources folder, the script's folder, the Macros folder, or an absolute path. Throws if missing. |
+| `readTextFile(file)` | Reads a text file (same lookup) as a string. |
+| `iimInit()`, `iimClose()` | Accepted for compatibility; they do nothing and return `1`. |
+
+**Return codes** (simplified compared with iMacros):
+
+| Code | Meaning |
+|---|---|
+| `1` | Success |
+| `-1` | The macro failed at run time (element not found, timeout, bad URL, an invalid `iimSet` value for a built-in variable, ...). See `iimGetLastError()`. |
+| `-2` | Syntax error in the macro (nothing was played) |
+| `-3` | Macro file not found or unreadable |
+| `-101` | The macro was stopped |
+
+**Behaviour**
+
+- Macros played by `iimPlay` share the browser, tabs and the Macros/Datasources/Downloads folders with normal playback.
+  Each `iimPlay` starts with fresh variables (as in iMacros); pass data with `iimSet` and read results with
+  `iimGetLastExtract`. `!EXTRACT_TEST_POPUP` is off inside scripts.
+- An uncaught JavaScript error stops the script. The status bar and an error box show `Line n: Error: message`, and
+  line *n* of the script is highlighted. JavaScript syntax errors are reported before anything runs.
+- The script runs on a background thread; every `iimPlay`, dialog, log line and `iimEval` runs on the UI thread, so the
+  window stays responsive. **Stop** aborts the script at once, also in the middle of an infinite loop or a running
+  `iimPlay` (the macro stops, then the script ends). The abort cannot be caught by `try/catch`. An open
+  `alert`/`confirm`/`prompt` dialog must be closed first.
+- During a script the editor is not highlighted line by line; the status bar shows the `iimPlay` line that is running.
+
 ## Not implemented / differences from iMacros
 
 These commands are **parsed but not implemented**. They are skipped with a warning in the log:
@@ -327,5 +387,7 @@ Also not supported:
 - Cross-origin iframes can't be used with `FRAME`/`TAG`, because the finder script runs in the top document.
 - The recorder records only the top-level document (no iframes). It does not record hover, drag, or file uploads, and it does not record navigations caused by clicks (those clicks are recorded as `TAG`). Password fields are recorded in plain text, with a warning comment.
 - File inputs can't be filled (`CONTENT=` on `INPUT:FILE` is an error).
-- Macros are not encrypted, and there is no `!ENCRYPTION`, scripting interface, or command-line player.
+- Macros are not encrypted, and there is no `!ENCRYPTION` or command-line player. There is no external (COM)
+  Scripting Interface; JavaScript macros (`.js`) run inside the app instead. `iimGetLastPerformance`, `iimTakeBrowserScreenshot`,
+  `iimGetInterfaceVersion` and the full iMacros error-code table are not implemented.
 - Matching of `TXT:` and other attribute values is case-sensitive.

@@ -29,6 +29,8 @@ public sealed class FakeBrowserDriver : IBrowserDriver
     /// <summary>Called before each ExecuteScriptAsync with the 1-based call number (e.g. to add elements late).</summary>
     public Action<int, JsDom>? BeforeScript { get; set; }
     public Func<string, Exception?>? FailNavigation { get; set; }
+    /// <summary>Fallback page script for URLs not in <see cref="Pages"/> (e.g. data: URLs).</summary>
+    public Func<string, string?>? PageResolver { get; set; }
 
     public FakeBrowserDriver(string? initialPage = null)
     {
@@ -66,7 +68,7 @@ public sealed class FakeBrowserDriver : IBrowserDriver
         if (FailNavigation?.Invoke(url) is { } ex) throw ex;
         Current.History.Push(Current.Url);
         Current.Url = url;
-        Current.Dom = NewDom(Pages.TryGetValue(url, out var p) ? p : null);
+        Current.Dom = NewDom(Pages.TryGetValue(url, out var p) ? p : PageResolver?.Invoke(url));
         return Task.CompletedTask;
     }
 

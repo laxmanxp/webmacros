@@ -19,6 +19,12 @@ public interface IMacroHost
 
     /// <summary>Shows the extracted data at the end of a loop when !EXTRACT_TEST_POPUP is YES.</summary>
     Task ShowExtractAsync(string extract, CancellationToken ct);
+
+    /// <summary>Yes/No question (JavaScript <c>confirm()</c> in .js scripts). Returns true for OK.</summary>
+    Task<bool> ConfirmAsync(string message, CancellationToken ct) => Task.FromResult(true);
+
+    /// <summary>Short status text (<c>iimDisplay()</c> in .js scripts).</summary>
+    void ShowStatus(string message) { }
 }
 
 /// <summary>A host that ignores UI requests (prompts return the default value).</summary>
@@ -31,4 +37,6 @@ public class NullMacroHost : IMacroHost
     public virtual Task ShowMessageAsync(string message, CancellationToken ct) => Task.CompletedTask;
     public virtual Task PauseAsync(CancellationToken ct) => Task.CompletedTask;
     public virtual Task ShowExtractAsync(string extract, CancellationToken ct) => Task.CompletedTask;
+    public virtual Task<bool> ConfirmAsync(string message, CancellationToken ct) => Task.FromResult(true);
+    public virtual void ShowStatus(string message) { }
 }

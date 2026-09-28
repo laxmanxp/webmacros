@@ -82,6 +82,7 @@
                     </WrapPanel>
                     <WrapPanel>
                         <Button x:Name="NewButton" Content="New" Click="OnNew" />
+                        <Button x:Name="NewScriptButton" Content="New JS" Click="OnNewScript" ToolTip="New JavaScript macro (.js) using iimPlay, iimSet, loops and conditions" />
                         <Button x:Name="SaveButton" Content="Save" Click="OnSave" ToolTip="Save (Ctrl+S)" />
                         <Button Content="Save as…" Click="OnSaveAs" />
                         <Button Content="↻" ToolTip="Refresh list" Click="OnRefreshList" />

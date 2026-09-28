@@ -34,7 +34,7 @@ public sealed partial class MacroInterpreter
 
     public bool IsRunning { get; private set; }
 
-    public Task<PlayResult> PlayAsync(string macroText, int loops = 1, CancellationToken ct = default)
+    public Task<PlayResult> PlayAsync(string macroText, int loops = 1, CancellationToken ct = default, MacroRunOptions? run = null)
     {
         ParsedMacro parsed;
         try
@@ -46,10 +46,10 @@ public sealed partial class MacroInterpreter
             _host.Log(LogLevel.Error, ex.Message);
             return Task.FromResult(new PlayResult { Status = PlayStatus.Failed, ErrorLine = ex.LineNumber, ErrorMessage = ex.Reason });
         }
-        return PlayAsync(parsed, loops, ct);
+        return PlayAsync(parsed, loops, ct, run);
     }
 
-    public async Task<PlayResult> PlayAsync(ParsedMacro macro, int loops = 1, CancellationToken ct = default)
+    public async Task<PlayResult> PlayAsync(ParsedMacro macro, int loops = 1, CancellationToken ct = default, MacroRunOptions? run = null)
     {
         if (IsRunning) throw new InvalidOperationException("A macro is already running");
         IsRunning = true;
@@ -68,6 +68,8 @@ public sealed partial class MacroInterpreter
             var loopValue = 1;
             var first = true;
             _state.LoopChanged += v => loopValue = v;
+            if (run is not null && !ApplyRunOptions(run, out var presetError))
+                return Finish(PlayStatus.Failed, completed, extracts, sw, null, presetError);
             while (loopValue <= maxLoops || first)
             {
                 _state.Loop = loopValue;
@@ -142,6 +144,28 @@ public sealed partial class MacroInterpreter
             _driver.DialogHandler = null;
             IsRunning = false;
         }
+    }
+
+    /// <summary>Applies variables set with iimSet (and other per-run settings) before the first line runs.</summary>
+    private bool ApplyRunOptions(MacroRunOptions run, out string? error)
+    {
+        error = null;
+        if (run.ShowExtractPopup is bool popup) _state.Set("!EXTRACT_TEST_POPUP", popup ? "YES" : "NO");
+        foreach (var (name, value) in run.Variables)
+        {
+            try
+            {
+                var warning = _state.Set(name, value);
+                if (warning is not null) _host.Log(LogLevel.Warning, $"iimSet {name}: {warning}");
+            }
+            catch (MacroRuntimeException ex)
+            {
+                error = $"iimSet(\"{name}\"): {ex.Message}";
+                _host.Log(LogLevel.Error, error);
+                return false;
+            }
+        }
+        return true;
     }
 
     private PlayResult Finish(PlayStatus status, int completed, List<string> extracts, Stopwatch sw, int? line, string? message)

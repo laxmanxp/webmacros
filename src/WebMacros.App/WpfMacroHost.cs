@@ -45,6 +45,11 @@ public sealed class WpfMacroHost : IMacroHost
 
     public void Resume() => _pause?.TrySetResult();
 
+    public Task<bool> ConfirmAsync(string message, CancellationToken ct) =>
+        Task.FromResult(InputDialog.Confirm(_window, "WebMacros – confirm", message));
+
+    public void ShowStatus(string message) => _window.SetStatus(message);
+
     public Task ShowExtractAsync(string extract, CancellationToken ct)
     {
         var text = extract.Replace(MacroState.ExtractSeparator, Environment.NewLine);
