@@ -97,6 +97,73 @@ ADD !EXTRACT {{typed}}
 ADD !EXTRACT sum={{sum}}
 """);
 
+    public static readonly SampleFile AddRowsScript = new("05-Script-Add-Rows-From-CSV.js", """
+// WebMacros JavaScript macro (iMacros-style scripting).
+// Opens a small demo page, then uses a while loop that clicks "Add Row" and fills each new row from
+// customers.csv (Documents\WebMacros\Datasources). An if-condition checks the extracted status text.
+// Press Stop at any time to abort the script.
+
+var MAX_ROWS = 5;
+var page =
+  "<html><head><title>Rows demo</title></head><body style='font-family:sans-serif'>" +
+  "<h2>Order rows</h2><table border='1' cellpadding='4'><thead><tr><th>#</th><th>Name</th><th>Email</th><th>Priority</th></tr></thead>" +
+  "<tbody id='rows'></tbody></table><p><button type='button' id='add' onclick='addRow()'>Add Row</button></p>" +
+  "<p id='status'>0 rows</p><script>function addRow(){var tb=document.getElementById('rows');var n=tb.rows.length;" +
+  "if(n>=" + MAX_ROWS + "){document.getElementById('status').textContent='Maximum rows reached';return;}" +
+  "var tr=tb.insertRow();tr.innerHTML='<td>'+(n+1)+'</td><td><input name=name></td><td><input name=email></td>" +
+  "<td><input type=checkbox name=priority></td>';document.getElementById('status').textContent=(n+1)+' rows';}</script></body></html>";
+
+if (iimPlay("CODE:URL GOTO=data:text/html;charset=utf-8," + encodeURIComponent(page)) < 0) {
+  alert("Could not open the demo page: " + iimGetLastError());
+  iimExit();
+}
+
+var rows = readCsv("customers.csv");   // [[header...], [row 1...], ...]
+console.log("Read " + (rows.length - 1) + " customers from customers.csv");
+
+var i = 1;                               // skip the header line
+while (i < rows.length) {
+  var customer = rows[i];
+  iimDisplay("Adding row " + i + ": " + customer[0]);
+
+  // Click "Add Row" and read the status text the page shows.
+  var ret = iimPlay("CODE:TAG POS=1 TYPE=BUTTON ATTR=TXT:Add<SP>Row\n" +
+                    "TAG POS=1 TYPE=P ATTR=ID:status EXTRACT=TXT");
+  if (ret < 0) {
+    console.error("Add Row failed: " + iimGetLastError());
+    break;
+  }
+  var status = iimGetLastExtract(1);
+  if (status == "Maximum rows reached") {
+    iimDisplay("The page does not accept more rows; stopping after " + (i - 1) + " row(s)");
+    break;
+  }
+
+  // Fill the new row. iimSet values are available as {{name}} in the next iimPlay only.
+  iimSet("row", i);
+  iimSet("name", customer[0]);
+  iimSet("email", customer[2]);
+  ret = iimPlay("CODE:TAG POS={{row}} TYPE=INPUT:TEXT ATTR=NAME:name CONTENT={{name}}\n" +
+                "TAG POS={{row}} TYPE=INPUT:TEXT ATTR=NAME:email CONTENT={{email}}");
+  if (ret < 0) {
+    console.error("Filling row " + i + " failed: " + iimGetLastError());
+    break;
+  }
+
+  // Condition on the data: large orders get the priority checkbox.
+  if (customer[3] == "large") {
+    iimSet("row", i);
+    iimPlay("CODE:TAG POS={{row}} TYPE=INPUT:CHECKBOX ATTR=NAME:priority CONTENT=YES");
+    console.log(customer[0] + " marked as priority");
+  }
+  i++;
+}
+
+// Run JavaScript in the page and use its result in the script.
+var count = iimEval("document.getElementsByTagName('tr').length - 1");
+iimDisplay("Done: the table has " + count + " row(s)");
+""");
+
     public static readonly SampleFile CustomersCsv = new("customers.csv", """
 name,phone,email,size,topping,delivery,comments
 Alice Smith,555-0101,alice@example.com,small,bacon,12:00,Ring the bell
@@ -105,5 +172,7 @@ Carol White,555-0103,carol@example.com,large,mushroom,20:15,No onions
 """);
 
     public static IReadOnlyList<SampleFile> Macros { get; } = new[] { DuckDuckGo, FormFromCsv, LoopPages, DialogsDemo };
+    /// <summary>JavaScript (.js) macros.</summary>
+    public static IReadOnlyList<SampleFile> Scripts { get; } = new[] { AddRowsScript };
     public static IReadOnlyList<SampleFile> DataSources { get; } = new[] { CustomersCsv };
 }
