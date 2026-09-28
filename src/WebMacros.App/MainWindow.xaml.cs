@@ -10,6 +10,7 @@ using Microsoft.Web.WebView2.Core;
 using WebMacros.App.Browser;
 using WebMacros.Engine.Recording;
 using WebMacros.Engine.Runtime;
+using WebMacros.Engine.Scripts;
 using WebMacros.Engine.Syntax;
 
 namespace WebMacros.App;
@@ -19,10 +20,28 @@ public partial class MainWindow : Window
     private const int MaxLogEntries = 5000;
     private const string NewMacroTemplate = "VERSION BUILD=1000\r\nTAB T=1\r\nURL GOTO=https://example.com/\r\n";
 
+    private const string NewScriptTemplate =
+        "// JavaScript macro: drive .iim macros with loops and conditions (see README, \"JavaScript macros\").\r\n" +
+        "var ret = iimPlay(\"CODE:URL GOTO=https://example.com/\\nTAG POS=1 TYPE=H1 ATTR=* EXTRACT=TXT\");\r\n" +
+        "if (ret < 0) {\r\n" +
+        "  alert(\"Failed: \" + iimGetLastError());\r\n" +
+        "  iimExit();\r\n" +
+        "}\r\n" +
+        "var heading = iimGetLastExtract(1);\r\n" +
+        "for (var i = 1; i <= 3; i++) {\r\n" +
+        "  iimSet(\"i\", i);\r\n" +
+        "  iimPlay(\"CODE:SET !EXTRACT {{i}}\");\r\n" +
+        "  console.log(\"Loop \" + i + \": \" + heading);\r\n" +
+        "}\r\n" +
+        "iimDisplay(\"Page title: \" + iimEval(\"document.title\"));\r\n";
+
     private readonly MacroLibrary _library = new();
     private readonly WpfMacroHost _host;
     private WebView2BrowserDriver? _driver;
     private MacroInterpreter? _interpreter;
+    private ScriptRunner? _scriptRunner;
+    private bool _isScript;
+    private bool _scriptRunning;
     private CancellationTokenSource? _playCts;
     private MacroRecorder? _recorder;
     private string? _currentPath;
@@ -72,13 +91,15 @@ public partial class MainWindow : Window
             Close();
             return;
         }
-        _interpreter = new MacroInterpreter(_driver, _host, new InterpreterOptions
+        var options = new InterpreterOptions
         {
             MacroFolder = _library.MacrosFolder,
             DataSourceFolder = _library.DataSourcesFolder,
             DownloadFolder = _library.DownloadsFolder,
             Version = typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.0",
-        });
+        };
+        _interpreter = new MacroInterpreter(_driver, _host, options);
+        _scriptRunner = new ScriptRunner(_interpreter, _driver, _host, options);
         AddLog(LogLevel.Info, $"Macros folder: {_library.MacrosFolder}");
         StatusText.Text = "Ready";
     }
@@ -246,8 +267,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SetEditorText(string text, string? path)
+    private void SetEditorText(string text, string? path, bool? isScript = null)
     {
+        _isScript = isScript ?? MacroLibrary.IsScript(path);
         _suppressDirty = true;
         Editor.Text = text;
         _suppressDirty = false;
@@ -257,7 +279,7 @@ public partial class MainWindow : Window
     }
 
     private void UpdateEditorTitle() =>
-        EditorTitle.Text = (_currentPath is null ? "Untitled.iim" : Path.GetFileName(_currentPath)) + (_dirty ? " *" : "");
+        EditorTitle.Text = (_currentPath is null ? (_isScript ? "Untitled.js" : "Untitled.iim") : Path.GetFileName(_currentPath)) + (_dirty ? " *" : "");
 
     private void OnEditorTextChanged(object sender, TextChangedEventArgs e)
     {
@@ -288,6 +310,13 @@ public partial class MainWindow : Window
         MacroList.SelectedItem = null;
     }
 
+    private void OnNewScript(object sender, RoutedEventArgs e)
+    {
+        if (IsPlaying || IsRecording || !ConfirmDiscardChanges()) return;
+        SetEditorText(NewScriptTemplate, null, isScript: true);
+        MacroList.SelectedItem = null;
+    }
+
     private void OnSave(object sender, RoutedEventArgs e) => Save(saveAs: false);
     private void OnSaveAs(object sender, RoutedEventArgs e) => Save(saveAs: true);
     private void OnSaveCommand(object sender, ExecutedRoutedEventArgs e) => Save(saveAs: false);
@@ -297,10 +326,10 @@ public partial class MainWindow : Window
         var path = _currentPath;
         if (path is null || saveAs)
         {
-            var suggested = path is null ? "Macro-" + DateTime.Now.ToString("yyyyMMdd-HHmm") : Path.GetFileNameWithoutExtension(path) + "-copy";
+            var suggested = path is null ? (_isScript ? "Script-" : "Macro-") + DateTime.Now.ToString("yyyyMMdd-HHmm") : Path.GetFileNameWithoutExtension(path) + "-copy";
             var name = InputDialog.Ask(this, "Save macro", $"Macro name (saved in {_library.MacrosFolder}):", suggested);
             if (string.IsNullOrWhiteSpace(name)) return false;
-            path = _library.PathFor(name.Trim());
+            path = _library.PathFor(name.Trim(), _isScript ? ".js" : ".iim");
             if (File.Exists(path) && MessageBox.Show(this, $"{Path.GetFileName(path)} exists. Overwrite?", "WebMacros",
                     MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
                 return false;
@@ -315,6 +344,7 @@ public partial class MainWindow : Window
             return false;
         }
         _currentPath = path;
+        _isScript = MacroLibrary.IsScript(path);
         _dirty = false;
         UpdateEditorTitle();
         RefreshMacroList();
@@ -327,6 +357,12 @@ public partial class MainWindow : Window
 
     private bool ValidateEditor()
     {
+        if (_isScript)
+        {
+            var jsErrors = ScriptRunner.Validate(Editor.Text);
+            foreach (var (line, message) in jsErrors) AddLog(LogLevel.Error, $"Script line {line}: SyntaxError: {message}");
+            return jsErrors.Count == 0;
+        }
         var errors = MacroParser.Validate(Editor.Text);
         foreach (var err in errors) AddLog(LogLevel.Error, err.Message);
         return errors.Count == 0;
@@ -350,7 +386,8 @@ public partial class MainWindow : Window
     private async Task PlayAsync(int loops)
     {
         if (_interpreter is null || IsPlaying || IsRecording) return;
-        if (!ValidateEditor()) { StatusText.Text = "Macro has syntax errors"; return; }
+        if (!ValidateEditor()) { StatusText.Text = _isScript ? "Script has syntax errors" : "Macro has syntax errors"; return; }
+        if (_isScript) { await PlayScriptAsync(loops); return; }
 
         _playCts = new CancellationTokenSource();
         SetUiPlaying(true);
@@ -375,12 +412,53 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task PlayScriptAsync(int loops)
+    {
+        if (_scriptRunner is null) return;
+        if (loops > 1) AddLog(LogLevel.Warning, "Play Loop runs a JavaScript macro once; use a loop inside the script instead");
+
+        _playCts = new CancellationTokenSource();
+        _scriptRunning = true;
+        SetUiPlaying(true);
+        var name = _currentPath is null ? "Untitled.js" : Path.GetFileName(_currentPath);
+        var folder = _currentPath is null ? null : Path.GetDirectoryName(_currentPath);
+        AddLog(LogLevel.Info, $"▶ Running script {name}");
+        StatusText.Text = $"Running script {name}…";
+        try
+        {
+            // The script runs on its own thread; iimPlay, dialogs and logging are marshalled back to this UI thread.
+            var result = await _scriptRunner.RunAsync(Editor.Text, _playCts.Token, folder);
+            StatusText.Text = result.ToString();
+            if (result.Status == PlayStatus.Failed)
+            {
+                if (result.ErrorLine is int line) HighlightLine(line);
+                var where = result.ErrorLine is int l ? $"Line {l}: " : "";
+                MessageBox.Show(this, where + result.ErrorMessage, "WebMacros – script error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddLog(LogLevel.Error, "Script runner failed: " + ex.Message);
+            StatusText.Text = "Script failed";
+        }
+        finally
+        {
+            _playCts.Dispose();
+            _playCts = null;
+            _scriptRunning = false;
+            SetUiPlaying(false);
+        }
+    }
+
+    public void SetStatus(string message) => StatusText.Text = message;
+
     private void SetUiPlaying(bool playing)
     {
         PlayButton.IsEnabled = !playing;
         PlayLoopButton.IsEnabled = !playing;
         RecordButton.IsEnabled = !playing;
         NewButton.IsEnabled = !playing;
+        NewScriptButton.IsEnabled = !playing;
         StopButton.IsEnabled = playing || IsRecording;
         Editor.IsReadOnly = playing;
         MacroList.IsEnabled = !playing;
@@ -463,6 +541,12 @@ public partial class MainWindow : Window
 
     public void ShowCurrentLine(int lineNumber, string text, int loop)
     {
+        if (_scriptRunning)
+        {
+            // Line numbers belong to the macro played by iimPlay, not to the script in the editor.
+            CurrentLineText.Text = $"iimPlay · Line {lineNumber}: {text}";
+            return;
+        }
         CurrentLineText.Text = $"Loop {loop} · Line {lineNumber}: {text}";
         HighlightLine(lineNumber);
     }
